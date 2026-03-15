@@ -407,11 +407,11 @@ class UIndexMCPService:
 
 def main():
     """Example usage of the MCP service"""
-    service = PirateBayMCPService()
+    service = UIndexMCPService()
     
     # Example search
     print("Searching for 'Ted'...")
-    results = service.search("Ted", 1)
+    results = service.search("A Knight of the Seven Kingdoms", 0)
     
     print(f"Found {len(results)} results:")
     for i, torrent in enumerate(results[:5]):  # Show first 5 results

@@ -13,6 +13,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from mcp_service import PirateBayMCPService, UIndexMCPService
 
+max_page_count=100
 
 class MultiSiteMCPServer:
     def __init__(self):
@@ -100,7 +101,7 @@ class MultiSiteMCPServer:
             # Format results as readable text
             output = f"Found {len(results)} Pirate Bay results for '{keyword}' (page {page}):\n\n"
             
-            for i, torrent in enumerate(results[:10]):  # Limit to 10 results
+            for i, torrent in enumerate(results[:max_page_count]):  # Limit to 10 results
                 output += f"{i+1}. {torrent['name']}\n"
                 output += f"   Size: {torrent['size']} | Seeders: {torrent['seeders']} | Leechers: {torrent['leechers']}\n"
                 output += f"   Uploaded: {torrent['upload_date']} | Uploader: {torrent['uploader']}\n"
@@ -108,8 +109,8 @@ class MultiSiteMCPServer:
                     output += f"   Magnet: {torrent['magnet'][:60]}...\n"
                 output += "\n"
             
-            if len(results) > 10:
-                output += f"... and {len(results) - 10} more results\n"
+            if len(results) > max_page_count:
+                output += f"... and {len(results) - max_page_count} more results\n"
             
             return [TextContent(type="text", text=output)]
             
@@ -141,7 +142,7 @@ class MultiSiteMCPServer:
             # Format results as readable text
             output = f"Found {len(results)} UIndex results for '{keyword}' (category {category}):\n\n"
             
-            for i, torrent in enumerate(results[:10]):  # Limit to 10 results
+            for i, torrent in enumerate(results[:max_page_count]):  # Limit to 10 results
                 output += f"{i+1}. {torrent['name']}\n"
                 output += f"   Size: {torrent['size']} | Seeders: {torrent['seeders']} | Leechers: {torrent['leechers']}\n"
                 output += f"   Uploaded: {torrent['upload_date']} | Uploader: {torrent['uploader']}\n"
@@ -149,8 +150,8 @@ class MultiSiteMCPServer:
                     output += f"   Magnet: {torrent['magnet'][:60]}...\n"
                 output += "\n"
             
-            if len(results) > 10:
-                output += f"... and {len(results) - 10} more results\n"
+            if len(results) > max_page_count:
+                output += f"... and {len(results) - max_page_count} more results\n"
             
             return [TextContent(type="text", text=output)]
             
