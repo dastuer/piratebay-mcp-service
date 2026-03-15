@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCP Service for Pirate Bay search and download
+MCP Service for Pirate Bay and UIndex search and download
 """
 
 import urllib.parse
@@ -251,6 +251,160 @@ class PirateBayMCPService:
             return True  # Still return True as the link is valid
 
 
+class UIndexMCPService:
+    """MCP Service for UIndex search and download"""
+    
+    def __init__(self, base_url: str = "https://uindex.org"):
+        self.base_url = base_url
+    
+    def search(self, keyword: str, category: int = 0) -> List[Dict[str, Any]]:
+        """
+        Search for torrents on UIndex
+        
+        Args:
+            keyword: Search keyword
+            category: Category ID (0 = all, 2 = TV, etc.)
+            
+        Returns:
+            List of torrent dictionaries with structured data
+        """
+        encoded_keyword = urllib.parse.quote(keyword)
+        url = f"{self.base_url}/search.php?search={encoded_keyword}&c={category}"
+        
+        try:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            req = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                }
+            )
+            
+            response = urllib.request.urlopen(req, context=ssl_context)
+            content_encoding = response.info().get('Content-Encoding')
+            if content_encoding == 'gzip':
+                html_content = gzip.decompress(response.read()).decode('utf-8')
+            else:
+                html_content = response.read().decode('utf-8')
+            
+            torrents = self._parse_search_results(html_content)
+            return torrents
+            
+        except Exception as e:
+            print(f"Error searching UIndex: {e}")
+            return []
+    
+    def _parse_search_results(self, html_content: str) -> List[Dict[str, Any]]:
+        """Parse HTML search results to extract torrent information"""
+        torrents = []
+        
+        tbody_pattern = r'<tbody>(.*?)</tbody>'
+        tbody_match = re.search(tbody_pattern, html_content, re.DOTALL | re.IGNORECASE)
+        if not tbody_match:
+            return torrents
+        
+        tbody_content = tbody_match.group(1)
+        row_pattern = r'<tr>(.*?)</tr>'
+        rows = re.findall(row_pattern, tbody_content, re.DOTALL | re.IGNORECASE)
+        
+        for row in rows:
+            torrent = self._parse_torrent_row(row)
+            if torrent:
+                torrents.append(torrent)
+        
+        return torrents
+    
+    def _parse_torrent_row(self, row_html: str) -> Optional[Dict[str, Any]]:
+        """Parse a single torrent row from HTML"""
+        try:
+            cell_pattern = r'<td[^>]*>(.*?)</td>'
+            cells = re.findall(cell_pattern, row_html, re.DOTALL | re.IGNORECASE)
+            
+            if len(cells) < 5:
+                return None
+            
+            category = cells[0]
+            name_cell = cells[1]
+            size_cell = cells[2]
+            seeders_cell = cells[3]
+            leechers_cell = cells[4]
+            
+            magnet_pattern = r"href='(magnet:[^']+)'"
+            magnet_match = re.search(magnet_pattern, name_cell)
+            magnet_link = magnet_match.group(1) if magnet_match else ""
+            
+            name_pattern = r"href='/details\.php\?id=\d+'>([^<]+)</a>"
+            name_match = re.search(name_pattern, name_cell)
+            name = name_match.group(1) if name_match else "Unknown"
+            
+            date_pattern = r"<div class='sub'[^>]*>([^<]+)</div>"
+            date_match = re.search(date_pattern, name_cell)
+            upload_date = date_match.group(1).strip() if date_match else ""
+            
+            size = re.sub(r'<[^>]+>', '', size_cell).strip()
+            
+            seeders_text = re.sub(r'<[^>]+>', '', seeders_cell).strip()
+            seeders = int(seeders_text.replace(',', '')) if seeders_text.replace(',', '').isdigit() else 0
+            
+            leechers_text = re.sub(r'<[^>]+>', '', leechers_cell).strip()
+            leechers = int(leechers_text.replace(',', '')) if leechers_text.replace(',', '').isdigit() else 0
+            
+            return {
+                "name": name,
+                "url": f"{self.base_url}/details.php?id=",
+                "magnet": magnet_link,
+                "category": "TV" if "TV" in category else "Unknown",
+                "upload_date": upload_date,
+                "size": size,
+                "seeders": seeders,
+                "leechers": leechers,
+                "uploader": "UIndex",
+                "uploader_url": ""
+            }
+            
+        except Exception as e:
+            print(f"Error parsing UIndex torrent row: {e}")
+            return None
+    
+    def download_torrent(self, magnet_link: str) -> bool:
+        """Copy magnet link to clipboard for download"""
+        import subprocess
+        import platform
+        
+        if not magnet_link or not magnet_link.startswith("magnet:"):
+            print(f"Invalid magnet link: {magnet_link}")
+            return False
+        
+        try:
+            system = platform.system()
+            if system == "Darwin":
+                subprocess.run(["pbcopy"], input=magnet_link.encode(), check=True)
+            elif system == "Linux":
+                try:
+                    subprocess.run(["xclip", "-selection", "clipboard"], input=magnet_link.encode(), check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    subprocess.run(["xsel", "--clipboard", "--input"], input=magnet_link.encode(), check=True)
+            elif system == "Windows":
+                subprocess.run(["clip"], input=magnet_link.encode(), check=True)
+            else:
+                print(f"Magnet link (copy manually): {magnet_link}")
+                return True
+            
+            print(f"Magnet link copied to clipboard: {magnet_link[:60]}...")
+            return True
+        except Exception as e:
+            print(f"Failed to copy to clipboard: {e}")
+            print(f"Magnet link (copy manually): {magnet_link}")
+            return True
+
+
 def main():
     """Example usage of the MCP service"""
     service = PirateBayMCPService()
@@ -260,7 +414,7 @@ def main():
     results = service.search("Ted", 1)
     
     print(f"Found {len(results)} results:")
-    for i, torrent in enumerate(results[:100]):  # Show first 5 results
+    for i, torrent in enumerate(results[:5]):  # Show first 5 results
         print(f"{i+1}. {torrent['name']}")
         print(f"   Size: {torrent['size']}, Seeders: {torrent['seeders']}, Leechers: {torrent['leechers']}")
         print(f"   Magnet: {torrent['magnet'][:50]}..." if torrent['magnet'] else "   No magnet link")

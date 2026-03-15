@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCP Server for Pirate Bay search and download service
+MCP Server for Pirate Bay and UIndex search and download service
 Provides search and download tools as MCP endpoints
 """
 
@@ -11,13 +11,14 @@ from typing import Any, List, Dict
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
-from mcp_service import PirateBayMCPService
+from mcp_service import PirateBayMCPService, UIndexMCPService
 
 
-class PirateBayMCPServer:
+class MultiSiteMCPServer:
     def __init__(self):
-        self.service = PirateBayMCPService()
-        self.server = Server("piratebay-search")
+        self.piratebay_service = PirateBayMCPService()
+        self.uindex_service = UIndexMCPService()
+        self.server = Server("multi-site-search")
         
         # Set up tool handlers using decorators
         self._setup_handlers()
@@ -27,13 +28,25 @@ class PirateBayMCPServer:
         async def list_tools() -> List[Tool]:
             return [
                 Tool(
-                    name="search_torrents",
+                    name="search_piratebay",
                     description="Search for torrents on Pirate Bay",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "keyword": {"type": "string", "description": "Search term"},
                             "page": {"type": "integer", "description": "Page number (default: 1)", "default": 1}
+                        },
+                        "required": ["keyword"]
+                    }
+                ),
+                Tool(
+                    name="search_uindex",
+                    description="Search for torrents on UIndex",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "keyword": {"type": "string", "description": "Search term"},
+                            "category": {"type": "integer", "description": "Category ID (0 = all, 2 = TV, etc.)", "default": 0}
                         },
                         "required": ["keyword"]
                     }
@@ -53,14 +66,16 @@ class PirateBayMCPServer:
         
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-            if name == "search_torrents":
-                return await self.search_torrents(arguments)
+            if name == "search_piratebay":
+                return await self.search_piratebay(arguments)
+            elif name == "search_uindex":
+                return await self.search_uindex(arguments)
             elif name == "download_torrent":
                 return await self.download_torrent(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
-    async def search_torrents(self, arguments: Dict[str, Any]) -> List[TextContent]:
+    async def search_piratebay(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """
         Search for torrents on Pirate Bay
         
@@ -77,15 +92,15 @@ class PirateBayMCPServer:
             return [TextContent(type="text", text="Error: keyword is required")]
         
         try:
-            results = self.service.search(keyword, page)
+            results = self.piratebay_service.search(keyword, page)
             
             if not results:
                 return [TextContent(type="text", text="No results found")]
             
             # Format results as readable text
-            output = f"Found {len(results)} results for '{keyword}' (page {page}):\n\n"
+            output = f"Found {len(results)} Pirate Bay results for '{keyword}' (page {page}):\n\n"
             
-            for i, torrent in enumerate(results[:100]):  # Limit to 10 results
+            for i, torrent in enumerate(results[:10]):  # Limit to 10 results
                 output += f"{i+1}. {torrent['name']}\n"
                 output += f"   Size: {torrent['size']} | Seeders: {torrent['seeders']} | Leechers: {torrent['leechers']}\n"
                 output += f"   Uploaded: {torrent['upload_date']} | Uploader: {torrent['uploader']}\n"
@@ -93,13 +108,54 @@ class PirateBayMCPServer:
                     output += f"   Magnet: {torrent['magnet'][:60]}...\n"
                 output += "\n"
             
-            if len(results) > 100:
-                output += f"... and {len(results) - 100} more results\n"
+            if len(results) > 10:
+                output += f"... and {len(results) - 10} more results\n"
             
             return [TextContent(type="text", text=output)]
             
         except Exception as e:
-            return [TextContent(type="text", text=f"Error searching: {str(e)}")]
+            return [TextContent(type="text", text=f"Error searching Pirate Bay: {str(e)}")]
+    
+    async def search_uindex(self, arguments: Dict[str, Any]) -> List[TextContent]:
+        """
+        Search for torrents on UIndex
+        
+        Expected arguments:
+        {
+            "keyword": "search term",
+            "category": 0  (optional, default: 0)
+        }
+        """
+        keyword = arguments.get("keyword", "")
+        category = arguments.get("category", 0)
+        
+        if not keyword:
+            return [TextContent(type="text", text="Error: keyword is required")]
+        
+        try:
+            results = self.uindex_service.search(keyword, category)
+            
+            if not results:
+                return [TextContent(type="text", text="No results found")]
+            
+            # Format results as readable text
+            output = f"Found {len(results)} UIndex results for '{keyword}' (category {category}):\n\n"
+            
+            for i, torrent in enumerate(results[:10]):  # Limit to 10 results
+                output += f"{i+1}. {torrent['name']}\n"
+                output += f"   Size: {torrent['size']} | Seeders: {torrent['seeders']} | Leechers: {torrent['leechers']}\n"
+                output += f"   Uploaded: {torrent['upload_date']} | Uploader: {torrent['uploader']}\n"
+                if torrent['magnet']:
+                    output += f"   Magnet: {torrent['magnet'][:60]}...\n"
+                output += "\n"
+            
+            if len(results) > 10:
+                output += f"... and {len(results) - 10} more results\n"
+            
+            return [TextContent(type="text", text=output)]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error searching UIndex: {str(e)}")]
     
     async def download_torrent(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """
@@ -119,7 +175,8 @@ class PirateBayMCPServer:
             return [TextContent(type="text", text="Error: Invalid magnet link")]
         
         try:
-            success = self.service.download_torrent(magnet_link)
+            # Try both services - they have the same download_torrent implementation
+            success = self.piratebay_service.download_torrent(magnet_link)
             if success:
                 return [TextContent(type="text", text=f"Torrent download initiated:\n{magnet_link}")]
             else:
@@ -149,7 +206,7 @@ class PirateBayMCPServer:
 
 def main():
     """Main entry point"""
-    server = PirateBayMCPServer()
+    server = MultiSiteMCPServer()
     try:
         asyncio.run(server.run())
     except KeyboardInterrupt:

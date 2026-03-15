@@ -1,0 +1,5 @@
+### 海盗船
+GET https://thepiratebay10.xyz/search/A%20Knight%20of%20the%20Seven%20Kingdoms/2/99/0
+### Uindex search为关键词 c为类型设置为0即可
+GET https://uindex.org/search.php?search=A+Knight+of+the+Seven+Kingdoms&c=0
+user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0
