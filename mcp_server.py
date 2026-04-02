@@ -11,7 +11,7 @@ from typing import Any, List, Dict
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
-from mcp_service import PirateBayMCPService, UIndexMCPService
+from mcp_service import PirateBayMCPService, UIndexMCPService, SoubtsouMCPService
 
 max_page_count=100
 
@@ -19,6 +19,7 @@ class MultiSiteMCPServer:
     def __init__(self):
         self.piratebay_service = PirateBayMCPService()
         self.uindex_service = UIndexMCPService()
+        self.soubtsou_service = SoubtsouMCPService()
         self.server = Server("multi-site-search")
         
         # Set up tool handlers using decorators
@@ -53,6 +54,18 @@ class MultiSiteMCPServer:
                     }
                 ),
                 Tool(
+                    name="search_soubtsou",
+                    description="Search for torrents on Soubtsou",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "keyword": {"type": "string", "description": "Search term"},
+                            "page": {"type": "integer", "description": "Page number (default: 1)", "default": 1}
+                        },
+                        "required": ["keyword"]
+                    }
+                ),
+                Tool(
                     name="download_torrent",
                     description="Prepare a torrent for download using its magnet link",
                     inputSchema={
@@ -73,6 +86,8 @@ class MultiSiteMCPServer:
                 return await self.search_uindex(arguments)
             elif name == "download_torrent":
                 return await self.download_torrent(arguments)
+            elif name == "search_soubtsou":
+                return await self.search_soubtsou(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
@@ -157,6 +172,47 @@ class MultiSiteMCPServer:
             
         except Exception as e:
             return [TextContent(type="text", text=f"Error searching UIndex: {str(e)}")]
+    
+    async def search_soubtsou(self, arguments: Dict[str, Any]) -> List[TextContent]:
+        """
+        Search for torrents on Soubtsou
+        
+        Expected arguments:
+        {
+            "keyword": "search term",
+            "page": 1  (optional, default: 1)
+        }
+        """
+        keyword = arguments.get("keyword", "")
+        page = arguments.get("page", 1)
+        
+        if not keyword:
+            return [TextContent(type="text", text="Error: keyword is required")]
+        
+        try:
+            results = self.soubtsou_service.search(keyword, page)
+            
+            if not results:
+                return [TextContent(type="text", text="No results found")]
+            
+            # Format results as readable text
+            output = f"Found {len(results)} Soubtsou results for '{keyword}' (page {page}):\n\n"
+            
+            for i, torrent in enumerate(results[:max_page_count]):  # Limit to 10 results
+                output += f"{i+1}. {torrent['name']}\n"
+                output += f"   Size: {torrent['size']} | Seeders: {torrent['seeders']} | Leechers: {torrent['leechers']}\n"
+                output += f"   Uploaded: {torrent['upload_date']} | Uploader: {torrent['uploader']}\n"
+                if torrent['magnet']:
+                    output += f"   Magnet: {torrent['magnet'][:60]}...\n"
+                output += "\n"
+            
+            if len(results) > max_page_count:
+                output += f"... and {len(results) - max_page_count} more results\n"
+            
+            return [TextContent(type="text", text=output)]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error searching Soubtsou: {str(e)}")]
     
     async def download_torrent(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """

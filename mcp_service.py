@@ -372,6 +372,196 @@ class UIndexMCPService:
         except Exception as e:
             print(f"Error parsing UIndex torrent row: {e}")
             return None
+     
+    def download_torrent(self, magnet_link: str) -> bool:
+        """Copy magnet link to clipboard for download"""
+        import subprocess
+        import platform
+        
+        if not magnet_link or not magnet_link.startswith("magnet:"):
+            print(f"Invalid magnet link: {magnet_link}")
+            return False
+        
+        try:
+            system = platform.system()
+            if system == "Darwin":
+                subprocess.run(["pbcopy"], input=magnet_link.encode(), check=True)
+            elif system == "Linux":
+                try:
+                    subprocess.run(["xclip", "-selection", "clipboard"], input=magnet_link.encode(), check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    subprocess.run(["xsel", "--clipboard", "--input"], input=magnet_link.encode(), check=True)
+            elif system == "Windows":
+                subprocess.run(["clip"], input=magnet_link.encode(), check=True)
+            else:
+                print(f"Magnet link (copy manually): {magnet_link}")
+                return True
+            
+            print(f"Magnet link copied to clipboard: {magnet_link[:60]}...")
+            return True
+        except Exception as e:
+            print(f"Failed to copy to clipboard: {e}")
+            print(f"Magnet link (copy manually): {magnet_link}")
+            return True
+
+
+class SoubtsouMCPService:
+    """MCP Service for Soubtsou search and download"""
+    
+    def __init__(self, base_url: str = "https://www.soubtsou.blog"):
+        self.base_url = base_url
+    
+    def _utf16to8(self, s: str) -> str:
+        """Convert UTF-16 to UTF-8 encoding"""
+        out = ""
+        len_s = len(s)
+        for i in range(len_s):
+            c = ord(s[i])
+            if (c >= 0x0001) and (c <= 0x007F):
+                out += s[i]
+            elif c > 0x07FF:
+                out += chr(0xE0 | ((c >> 12) & 0x0F))
+                out += chr(0x80 | ((c >> 6) & 0x3F))
+                out += chr(0x80 | ((c >> 0) & 0x3F))
+            else:
+                out += chr(0xC0 | ((c >> 6) & 0x1F))
+                out += chr(0x80 | ((c >> 0) & 0x3F))
+        return out
+    
+    def _str2hex(self, s: str) -> str:
+        """Convert string to hex representation"""
+        val = ""
+        for i in range(len(s)):
+            val += "{:x}".format(ord(s[i]))
+        return val
+    
+    def _build_search_url(self, keyword: str, page: int = 1) -> str:
+        """Build search URL for Soubtsou based on their JavaScript logic"""
+        # Process keyword like their mysubmit function:
+        # value = str2hex(utf16to8(document.getElementById('search').value));
+        processed = self._str2hex(self._utf16to8(keyword))
+        url = f"{self.base_url}/btsousuo/{processed}-{page}-id.html"
+        return url
+    
+    def search(self, keyword: str, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Search for torrents on Soubtsou
+        
+        Args:
+            keyword: Search keyword
+            page: Page number (default: 1)
+            
+        Returns:
+            List of torrent dictionaries with structured data
+        """
+        if not keyword:
+            return []
+        
+        # For pagination, Soubtsou uses different URLs like:
+        # /btsousuo/[value]-2-id.html for page 2
+        url = self._build_search_url(keyword, page)
+        
+        try:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            req = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                }
+            )
+            
+            response = urllib.request.urlopen(req, context=ssl_context)
+            content_encoding = response.info().get('Content-Encoding')
+            if content_encoding == 'gzip':
+                html_content = gzip.decompress(response.read()).decode('utf-8')
+            else:
+                html_content = response.read().decode('utf-8')
+            
+            torrents = self._parse_search_results(html_content)
+            return torrents
+            
+        except Exception as e:
+            print(f"Error searching Soubtsou: {e}")
+            return []
+    
+    def _parse_search_results(self, html_content: str) -> List[Dict[str, Any]]:
+        """Parse HTML search results to extract torrent information"""
+        torrents = []
+        
+        # Find all related-article divs
+        # The HTML might have extra whitespace or different formatting
+        article_pattern = r'<div class="related-article">.*?</div>'
+        articles = re.findall(article_pattern, html_content, re.DOTALL | re.IGNORECASE)
+        
+        for article in articles:
+            torrent = self._parse_torrent_article(article)
+            if torrent:
+                torrents.append(torrent)
+        
+        return torrents
+
+    def _parse_torrent_article(self, article_html: str) -> Optional[Dict[str, Any]]:
+        """Parse a single torrent article from HTML"""
+        try:
+            # 修改点 1: 将 ([^<]+) 改为 ([\s\S]*?) 以匹配内部的 <mark> 等 HTML 标签
+            title_pattern = r'<h1[^>]*class="[^"]*article-title[^"]*"[^>]*>\s*<a\s+href="([^"]+)">([\s\S]*?)</a>'
+            title_match = re.search(title_pattern, article_html)
+
+            if not title_match:
+                return None
+
+            relative_url = title_match.group(1)
+            title_html = title_match.group(2)
+
+            # 修改点 2: 使用泛用正则清理掉标题内所有的 HTML 标签 (包括 <mark>)
+            clean_title = re.sub(r'<[^>]+>', '', title_html).strip()
+
+            # Build full URL
+            if relative_url.startswith('/'):
+                torrent_url = f"{self.base_url}{relative_url}"
+            else:
+                torrent_url = f"{self.base_url}/{relative_url}"
+
+            # Extract magnet hash from the detail page URL
+            magnet_hash_match = re.search(r'/btxiazai/([a-f0-9]+)\.html', relative_url, re.IGNORECASE)
+            if magnet_hash_match:
+                magnet_hash = magnet_hash_match.group(1)
+                magnet_link = f"magnet:?xt=urn:btih:{magnet_hash}"
+            else:
+                magnet_link = ""
+
+            # 修改点 3: 优化 meta_pattern 适配 HTML 里的换行和空格结构
+            meta_pattern = r'<div[^>]*class="[^"]*article-meta[^"]*"[^>]*>\s*<p>类型：<b>([^<]+)</b>\s*大小：<b>([^<]+)</b>\s*数量：<b>([^<]+)</b>\s*时间：<b>([^<]+)</b></p>'
+            meta_match = re.search(meta_pattern, article_html)
+
+            file_type = meta_match.group(1) if meta_match else "未知"
+            size = meta_match.group(2) if meta_match else "未知"
+            count = meta_match.group(3) if meta_match else "0"
+            upload_date = meta_match.group(4) if meta_match else "未知"
+
+            return {
+                "name": clean_title,
+                "url": torrent_url,
+                "magnet": magnet_link,
+                "category": file_type.strip(),
+                "upload_date": upload_date.strip(),
+                "size": size.strip(),
+                "seeders": 0,  # Not available in search results
+                "leechers": 0,  # Not available in search results
+                "uploader": "Soubtsou",
+                "uploader_url": ""
+            }
+
+        except Exception as e:
+            print(f"Error parsing Soubtsou torrent article: {e}")
+            return None
     
     def download_torrent(self, magnet_link: str) -> bool:
         """Copy magnet link to clipboard for download"""
@@ -407,14 +597,14 @@ class UIndexMCPService:
 
 def main():
     """Example usage of the MCP service"""
-    service = UIndexMCPService()
+    service = SoubtsouMCPService()
     
     # Example search
     print("Searching for 'Ted'...")
-    results = service.search("A Knight of the Seven Kingdoms", 0)
+    results = service.search("Ted", 1)
     
     print(f"Found {len(results)} results:")
-    for i, torrent in enumerate(results[:5]):  # Show first 5 results
+    for i, torrent in enumerate(results[:10]):  # Show first 5 results
         print(f"{i+1}. {torrent['name']}")
         print(f"   Size: {torrent['size']}, Seeders: {torrent['seeders']}, Leechers: {torrent['leechers']}")
         print(f"   Magnet: {torrent['magnet'][:50]}..." if torrent['magnet'] else "   No magnet link")
