@@ -300,67 +300,90 @@ class UIndexMCPService:
         except Exception as e:
             print(f"Error searching UIndex: {e}")
             return []
-    
+
     def _parse_search_results(self, html_content: str) -> List[Dict[str, Any]]:
         """Parse HTML search results to extract torrent information"""
         torrents = []
-        
+
         tbody_pattern = r'<tbody>(.*?)</tbody>'
         tbody_match = re.search(tbody_pattern, html_content, re.DOTALL | re.IGNORECASE)
         if not tbody_match:
             return torrents
-        
+
         tbody_content = tbody_match.group(1)
         row_pattern = r'<tr>(.*?)</tr>'
         rows = re.findall(row_pattern, tbody_content, re.DOTALL | re.IGNORECASE)
-        
+
         for row in rows:
             torrent = self._parse_torrent_row(row)
             if torrent:
                 torrents.append(torrent)
-        
+
         return torrents
-    
+
     def _parse_torrent_row(self, row_html: str) -> Optional[Dict[str, Any]]:
         """Parse a single torrent row from HTML"""
         try:
             cell_pattern = r'<td[^>]*>(.*?)</td>'
             cells = re.findall(cell_pattern, row_html, re.DOTALL | re.IGNORECASE)
-            
-            if len(cells) < 5:
+
+            # 现有的 HTML 结构至少有 6 列: Cat, Name, Size, Uploaded, S, L
+            if len(cells) < 6:
                 return None
-            
-            category = cells[0]
+
+            category_cell = cells[0]
             name_cell = cells[1]
             size_cell = cells[2]
-            seeders_cell = cells[3]
-            leechers_cell = cells[4]
-            
-            magnet_pattern = r"href='(magnet:[^']+)'"
+            date_cell = cells[3]  # 上传时间独立成了一列
+            seeders_cell = cells[4]
+            leechers_cell = cells[5]
+
+            # 获取分类 (清理 SVG 和 HTML 标签)
+            category = re.sub(r'<[^>]+>', '', category_cell).strip()
+
+            # 提取 Magnet Link (适配双引号)
+            magnet_pattern = r'href="(magnet:[^"]+)"'
             magnet_match = re.search(magnet_pattern, name_cell)
-            magnet_link = magnet_match.group(1) if magnet_match else ""
-            
-            name_pattern = r"href='/details\.php\?id=\d+'>([^<]+)</a>"
+            # 替换 HTML 转义字符保证 magnet 链接有效
+            magnet_link = magnet_match.group(1).replace('&amp;', '&') if magnet_match else ""
+
+            # 提取详情页 ID
+            id_pattern = r'href="/details\.php\?id=(\d+)"'
+            id_match = re.search(id_pattern, name_cell)
+            torrent_id = id_match.group(1) if id_match else ""
+
+            # 提取名称: 直接使用 title 属性，避免 <mark> 标签干扰
+            name_pattern = r'class="sr-torrent-link"[^>]*title="([^"]+)"'
             name_match = re.search(name_pattern, name_cell)
-            name = name_match.group(1) if name_match else "Unknown"
-            
-            date_pattern = r"<div class='sub'[^>]*>([^<]+)</div>"
-            date_match = re.search(date_pattern, name_cell)
-            upload_date = date_match.group(1).strip() if date_match else ""
-            
+            if name_match:
+                name = name_match.group(1).strip()
+            else:
+                # 兜底方案：直接剥离所有的 HTML 标签
+                link_content_match = re.search(r'class="sr-torrent-link"[^>]*>(.*?)</a>', name_cell, re.DOTALL)
+                if link_content_match:
+                    name = re.sub(r'<[^>]+>', '', link_content_match.group(1)).strip()
+                else:
+                    name = "Unknown"
+
+            # 提取上传时间
+            upload_date = re.sub(r'<[^>]+>', '', date_cell).strip()
+
+            # 提取文件大小
             size = re.sub(r'<[^>]+>', '', size_cell).strip()
-            
+
+            # 提取做种数
             seeders_text = re.sub(r'<[^>]+>', '', seeders_cell).strip()
             seeders = int(seeders_text.replace(',', '')) if seeders_text.replace(',', '').isdigit() else 0
-            
+
+            # 提取吸血数
             leechers_text = re.sub(r'<[^>]+>', '', leechers_cell).strip()
             leechers = int(leechers_text.replace(',', '')) if leechers_text.replace(',', '').isdigit() else 0
-            
+
             return {
                 "name": name,
-                "url": f"{self.base_url}/details.php?id=",
+                "url": f"{self.base_url}/details.php?id={torrent_id}" if torrent_id else "",
                 "magnet": magnet_link,
-                "category": "TV" if "TV" in category else "Unknown",
+                "category": category if category else "Unknown",
                 "upload_date": upload_date,
                 "size": size,
                 "seeders": seeders,
@@ -368,7 +391,7 @@ class UIndexMCPService:
                 "uploader": "UIndex",
                 "uploader_url": ""
             }
-            
+
         except Exception as e:
             print(f"Error parsing UIndex torrent row: {e}")
             return None
@@ -597,7 +620,7 @@ class SoubtsouMCPService:
 
 def main():
     """Example usage of the MCP service"""
-    service = SoubtsouMCPService()
+    service = UIndexMCPService()
     
     # Example search
     print("Searching for 'Ted'...")
